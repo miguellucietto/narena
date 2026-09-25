@@ -18,9 +18,9 @@ A lightweight, high-performance arena allocator for C. Allocate a large chunk of
 ## Features
 
 ✨ **Simple & Efficient** — Pre-allocate memory once, use freely without NULL checks  
-🎯 **Zero-Cost Abstraction** — Minimal overhead compared to manual management  
-🧹 **Single Cleanup** — Free everything with a single call  
-📦 **Lightweight** — No external dependencies  
+**Zero-Cost Abstraction** — Minimal overhead compared to manual management  
+**Single Cleanup** — Free everything with a single call  
+**Lightweight** — No external dependencies  
 
 ## Quick Start
 
