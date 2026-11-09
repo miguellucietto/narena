@@ -4,43 +4,45 @@
 #include <assert.h>
 #include <stddef.h>
 
-
 #ifndef NARENA_DEFAULT_REGION_SIZE
 #define NARENA_DEFAULT_REGION_SIZE (1024UL * 1024UL)
 #endif
 
 typedef struct Region {
-  struct Region *next;
-  unsigned char *data;
-  size_t size;
-  size_t offset;
-  size_t old_offset;
+    struct Region *next;
+    unsigned char *data;
+    size_t size;
+    size_t offset;
 } Region;
 
 typedef struct NArena_checkpoint {
-  size_t region;
-  size_t offset;
+    Region *region;
+    size_t offset;
+    int valid;
 } NArena_checkpoint;
 
 typedef struct NArena {
-  Region *head;
-  Region *tail;
-  NArena_checkpoint checkpoint;
-  size_t current;
+    Region *head;
+    Region *tail;
+    Region *current;
+
+    NArena_checkpoint checkpoint;
 } NArena;
 
-// Arena can be initialized with Arena arena = {0};
+// Allocation
 void *narena_alloc(NArena *arena, size_t amount);
 void *narena_realloc(NArena *arena, void *ptr, size_t amount);
+
+// Lifecycle 
 void narena_destroy(NArena *arena);
+void narena_reset(NArena *arena);
 
-void narena_save(NArena *);
-void narena_restore(NArena *);
+// Checkpoints 
+void narena_save(NArena *arena);
+void narena_restore(NArena *arena);
 
-// fmt things
-char *narena_strdup(NArena *, const char *);
-char *narena_sprintf(NArena *, const char *, ...);
-
+// Strings 
+char *narena_strdup(NArena *arena, const char *src);
+char *narena_sprintf(NArena *arena, const char *fmt, ...);
 
 #endif /* NARENA_H */
-

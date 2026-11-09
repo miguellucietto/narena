@@ -107,6 +107,23 @@ void *new_ptr = narena_realloc(&arena, old_ptr, new_size);
 
 ---
 
+#### `narena_save() and narena_restore()`
+```c
+void narena_save(NArena *arena);
+void narena_restore(NArena *arena);
+```
+You can make checkpoints with `narena_save` and restore to that state with `narena_restore`
+
+**Example:**
+```
+NArena *arena = {0};
+narena_save(&arena); // save the current arena's state
+for (int i = 0; i < 10; i++) {
+    void *ptr = narena_malloc(); // allocate memory
+}
+narena_restore(&arena); // restore the arena to the last saved state
+```
+
 ## Examples
 
 ### String Manipulation
