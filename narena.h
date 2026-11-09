@@ -17,9 +17,16 @@ typedef struct Region {
   size_t old_offset;
 } Region;
 
+typedef struct NArena_checkpoint {
+  size_t region;
+  size_t offset;
+} NArena_checkpoint;
+
 typedef struct NArena {
-    Region *head;
-    Region *tail;
+  Region *head;
+  Region *tail;
+  NArena_checkpoint checkpoint;
+  size_t current;
 } NArena;
 
 // Arena can be initialized with Arena arena = {0};
@@ -27,8 +34,13 @@ void *narena_alloc(NArena *arena, size_t amount);
 void *narena_realloc(NArena *arena, void *ptr, size_t amount);
 void narena_destroy(NArena *arena);
 
+void narena_save(NArena *);
+void narena_restore(NArena *);
+
+// fmt things
 char *narena_strdup(NArena *, const char *);
 char *narena_sprintf(NArena *, const char *, ...);
+
 
 #endif /* NARENA_H */
 

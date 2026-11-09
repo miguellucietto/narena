@@ -5,6 +5,25 @@
 #include <stdlib.h>
 #include <stdarg.h>
 
+static inline size_t narena_get_i(NArena *arena) {
+  // should be used with already NULL checked arenas
+
+  size_t i = 0;
+  for (Region *reg = arena->head; reg != NULL; reg = reg->next) {
+    i++;
+  }
+  return i;
+}
+
+static inline Region *narena_get_region_by_index(NArena *arena, size_t index) {
+  size_t i = 0;
+  Region *reg;
+  for (reg = arena->head;
+       reg != NULL && i < index;
+       i++, reg = reg->next) {}
+
+  return reg;
+}
 
 static size_t narena_align_forward(size_t offset, size_t alignment)
 {
@@ -122,6 +141,28 @@ void narena_destroy(NArena *arena)
 }
 
 
+void narena_save(NArena *arena) {
+  if (!arena) return;
+
+  NArena_checkpoint c = {
+    .region = narena_get_i(arena),
+    .offset = narena_get_region_by_index(arena, arena->current)->offset,
+  };
+
+  arena->checkpoint = c;
+}
+
+void narena_restore(NArena *arena) {
+  if (!arena)
+    return;
+
+  arena->current = arena->checkpoint.region;
+  Region *reg = narena_get_region_by_index(arena, arena->current);
+
+  reg->offset = arena->checkpoint.offset;
+  reg->old_offset = arena->checkpoint.offset;
+}
+
 char *narena_strdup(NArena *arena, const char *src)
 {
   assert(arena != NULL);
@@ -155,3 +196,12 @@ char *narena_sprintf(NArena *arena, const char *fmt, ...) {
 
   return str;
 }
+
+void narena_reset(NArena *arena) {
+  if (!arena) return;
+
+  arena->current = 0;
+  arena->head->offset = 0;
+  arena->head->old_offset = 0;
+}
+
