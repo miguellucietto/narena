@@ -1,5 +1,5 @@
 CC = cc
-CFLAGS = -Wall -Wextra -Werror -ggdb
+CFLAGS = -std=c11 -Wall -Wextra -Werror -ggdb
 
 TEST_SOURCES := $(wildcard tests/*.c)
 TEST_BINS := $(patsubst tests/%.c, build/tests/%, $(TEST_SOURCES))
