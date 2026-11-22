@@ -1,16 +1,14 @@
 # narena
 
-`narena` é uma biblioteca C pequena de alocação por arena, distribuída em um
-único header no estilo STB. Ela agrupa alocações relacionadas e libera a memória
-em conjunto. Também oferece `realloc`, `calloc`, cópia e formatação de strings,
-reset da arena e um checkpoint reutilizável.
+`narena` is a small C arena allocator distributed as a single STB-style header.
+It groups related allocations and releases them together. The API includes
+aligned allocation, zeroed allocation, reallocation, memory and string helpers,
+reusable checkpoints, reset, and storage usage counters.
 
-## Escolha do modo de uso
+## STB-style header-only use
 
-### Header-only (estilo STB)
-
-Defina `NARENA_IMPLEMENTATION` em exatamente um arquivo `.c` antes de incluir o
-header. Nos demais arquivos, inclua-o sem essa definição:
+Define `NARENA_IMPLEMENTATION` in exactly one C file before including the
+header. Include it normally in every other file:
 
 ```c
 /* main.c */
@@ -31,30 +29,28 @@ int main(void)
 }
 ```
 
-Compile normalmente:
-
 ```sh
 cc -std=c11 -Wall -Wextra -pedantic main.c -o app
 ```
 
-### Compilação separada
+## Separate compilation
 
-Como conveniência, `narena.c` define `NARENA_IMPLEMENTATION` e inclui o header.
-Nesse modo, nenhum outro arquivo deve definir a macro:
+For convenience, `narena.c` defines `NARENA_IMPLEMENTATION` and includes the
+header. In this mode, do not define the implementation macro in another file:
 
 ```sh
 cc -std=c11 -Wall -Wextra -pedantic main.c narena.c -o app
 ```
 
-## Garbage collector opcional
+## Optional garbage collector mode
 
-`NARENA_GARBAGE_COLLECTOR` cria uma arena global chamada `__narena__`, troca o
-`main` do programa por um wrapper que chama o `main` escrito pelo usuário e
-destrói a arena quando ele retorna. Também redireciona `malloc`, `calloc`,
-`realloc` e `free` para essa arena:
+`NARENA_GARBAGE_COLLECTOR` creates a global arena named `__narena__`, renames the
+user's `main`, and supplies a wrapper that initializes and destroys the arena
+around the user's function. It also redirects `malloc`, `calloc`, `realloc`, and
+`free` to the arena:
 
 ```c
-/* gc_app.c: modo de unidade única; estas definições vêm antes do header. */
+/* gc_app.c: single translation unit; define these before the header. */
 #define NARENA_IMPLEMENTATION
 #define NARENA_GARBAGE_COLLECTOR
 #include <stdio.h>
@@ -71,66 +67,68 @@ int main(void)
 }
 ```
 
-Compile apenas esse arquivo:
-
 ```sh
 cc -std=c11 -Wall -Wextra -pedantic gc_app.c -o gc_app
 ```
 
-No modo coletor, `main()` e `main(int argc, char **argv)` são aceitos; a função
-do usuário é renomeada internamente, e o wrapper preserva os argumentos da
-linha de comando. Inclua os headers padrão e de terceiros **antes** de
-`narena.h`, porque os macros de alocação ficam ativos depois dele. Esse modo é
-para um único arquivo de aplicação e não deve ser combinado com `narena.c` nem
-com outra definição de `NARENA_IMPLEMENTATION`.
+The mode accepts `main()` and `main(int argc, char **argv)` and passes command
+line arguments through the wrapper. Include standard and third-party headers
+**before** `narena.h`, because the allocation macros remain active after the
+include. Use this mode in one application source file only; do not combine it
+with `narena.c` or another `NARENA_IMPLEMENTATION` definition.
 
-As chamadas `malloc(n)`, `calloc(count, size)` e `realloc(ptr, n)` passam a
-usar `__narena__`. `free(ptr)` vira uma operação sem efeito: a memória só é
-recuperada quando o `main` retorna. Portanto, não use esses macros para memória
-que precise ser liberada individualmente, nem misture ponteiros dessa arena com
-`free` da biblioteca C. `realloc(NULL, n)` e tamanhos zero retornam `NULL`, de
-acordo com a API `narena_realloc`/`narena_alloc`.
+`free(ptr)` is a no-op in this mode. Memory is reclaimed when the user's `main`
+returns, so do not use these macros for memory that must be freed individually
+or pass arena pointers to the C library's `free`. `realloc(NULL, n)` and zero
+sizes return `NULL`, matching the explicit `narena_*` API behavior.
 
 ## API
 
-Inclua `narena.h`. Uma arena inicializada com `{0}` pode ser reutilizada após
-`narena_reset`; `narena_destroy` libera as regiões e zera a estrutura.
+Initialize an arena with `{0}`. You can reuse it after `narena_reset`; calling
+`narena_destroy` releases all regions and zeros the structure.
 
-| Função | Comportamento |
+| Function | Behavior |
 | --- | --- |
-| `void *narena_alloc(NArena *, size_t)` | Reserva bytes alinhados para `max_align_t`; tamanho zero retorna `NULL`. |
-| `void *narena_calloc(NArena *, size_t count, size_t size)` | Reserva `count * size` bytes zerados; retorna `NULL` para zero ou overflow. |
-| `void *narena_realloc(NArena *, void *, size_t)` | Redimensiona a última alocação da região quando possível; caso contrário aloca e copia. Falha preserva a alocação original. |
-| `char *narena_strdup(NArena *, const char *)` | Copia a string, incluindo o terminador. |
-| `char *narena_sprintf(NArena *, const char *fmt, ...)` | Formata uma string dentro da arena. |
-| `void narena_save(NArena *)` | Substitui o checkpoint único pelo estado atual. |
-| `void narena_restore(NArena *)` | Volta ao checkpoint; as regiões posteriores ficam disponíveis para reutilização. O checkpoint continua válido. |
-| `void narena_reset(NArena *)` | Invalida as alocações e o checkpoint, mantendo regiões para reuso. |
-| `void narena_destroy(NArena *)` | Libera todas as regiões e zera a arena. |
+| `void *narena_alloc(NArena *, size_t)` | Allocates bytes aligned for `max_align_t`. A zero size returns `NULL`. |
+| `void *narena_alloc_aligned(NArena *, size_t, size_t alignment)` | Allocates with a power-of-two alignment. Alignments below `max_align_t` are raised to `max_align_t`. |
+| `void *narena_calloc(NArena *, size_t count, size_t size)` | Allocates and zeros `count * size` bytes; returns `NULL` for zero or overflow. |
+| `void *narena_realloc(NArena *, void *, size_t)` | Resizes the latest allocation in place when possible; otherwise allocates and copies. On failure, the original allocation stays valid. |
+| `void *narena_memdup(NArena *, const void *, size_t)` | Copies a byte range into the arena. |
+| `char *narena_strdup(NArena *, const char *)` | Copies a string, including its terminator. |
+| `char *narena_sprintf(NArena *, const char *fmt, ...)` | Formats a string inside the arena. |
+| `size_t narena_bytes_used(const NArena *)` | Reports consumed region storage, including headers and alignment padding. |
+| `size_t narena_bytes_reserved(const NArena *)` | Reports total region capacity reserved from the system allocator. |
+| `void narena_save(NArena *)` | Replaces the arena's single checkpoint with its current state. |
+| `void narena_restore(NArena *)` | Returns to the checkpoint; later regions remain allocated for reuse. The checkpoint stays valid. |
+| `void narena_reset(NArena *)` | Invalidates allocations and the checkpoint while retaining regions for reuse. |
+| `void narena_destroy(NArena *)` | Releases all regions and zeros the arena. |
 
-Toda função aceita `NULL` para o argumento `NArena *` com comportamento seguro
-(`NULL` ou nenhuma ação). Os ponteiros obtidos da arena deixam de ser válidos
-após `restore`, `reset` ou `destroy`, conforme o estado restaurado. Não use
-`free` da libc em ponteiros da arena.
+Functions safely accept a `NULL` arena (`NULL` result or no action). Pointers
+become invalid when their storage is rewound by `restore`, `reset`, or
+`destroy`. Never pass arena pointers to the C library's `free`.
 
-`narena_realloc` aceita ponteiros retornados por esta arena. Se a alocação não
-for a última da região, ela aloca outro bloco e copia os bytes preservados; o
-bloco antigo continua consumindo espaço até reset, restore aplicável ou
-destruição. Tamanho zero retorna `NULL` e não libera o bloco antigo.
+`narena_realloc` accepts pointers returned by the same arena. If the allocation
+is not the latest in its region, it allocates a replacement and copies the
+preserved bytes; the old block continues to consume space until reset, a
+checkpoint restore that rewinds it, or destruction. A zero size returns `NULL`
+and does not release the old block. Reallocation preserves at least the normal
+`max_align_t` alignment; use `narena_alloc_aligned` again if a larger alignment
+is required.
 
-`narena_save` mantém somente um checkpoint por arena. Chamadas sucessivas
-substituem-no; checkpoints não são empilhados. `restore` não libera regiões do
-sistema operacional, apenas permite reutilizá-las.
+Each arena has one checkpoint. Saving again replaces it; checkpoints are not
+nested. Restore does not return regions to the system allocator; it makes their
+storage available for reuse. An arena must not be shallow-copied or used
+concurrently without external synchronization.
 
-O tamanho padrão de região é 4096 bytes. Para alterá-lo, defina
-`NARENA_DEFAULT_REGION_SIZE` antes do header. Uma alocação maior que esse valor
-recebe uma região própria com tamanho suficiente.
+The default region size is 4096 bytes. Override it by defining
+`NARENA_DEFAULT_REGION_SIZE` before including the header. Large allocations get
+a region large enough to hold the request and its alignment padding.
 
-## Desenvolvimento
+## Development
 
 ```sh
 make tests
 ```
 
-Os binários dos exemplos são escritos em `build/tests/`. A licença é MIT; veja
-[LICENSE](LICENSE).
+The example binaries are written to `build/tests/`. This project is licensed
+under MIT; see [LICENSE](LICENSE).

@@ -38,10 +38,14 @@ typedef struct NArena {
 } NArena;
 
 void *narena_alloc(NArena *arena, size_t amount);
+void *narena_alloc_aligned(NArena *arena, size_t amount, size_t alignment);
 void *narena_calloc(NArena *arena, size_t count, size_t amount);
 void *narena_realloc(NArena *arena, void *ptr, size_t amount);
+void *narena_memdup(NArena *arena, const void *src, size_t amount);
 char *narena_strdup(NArena *arena, const char *src);
 char *narena_sprintf(NArena *arena, const char *fmt, ...);
+size_t narena_bytes_used(const NArena *arena);
+size_t narena_bytes_reserved(const NArena *arena);
 void narena_save(NArena *arena);
 void narena_restore(NArena *arena);
 void narena_reset(NArena *arena);
@@ -82,16 +86,6 @@ static int narena_size_add_overflow(size_t a, size_t b)
     return a > SIZE_MAX - b;
 }
 
-static size_t narena_align_offset(size_t offset)
-{
-    const size_t alignment = alignof(max_align_t);
-    const size_t remainder = offset % alignment;
-    if (remainder == 0)
-        return offset;
-    const size_t padding = alignment - remainder;
-    return narena_size_add_overflow(offset, padding) ? SIZE_MAX : offset + padding;
-}
-
 static NArenaRegion *narena_region_create(size_t capacity)
 {
     NArenaRegion *region;
@@ -111,50 +105,88 @@ static NArenaRegion *narena_region_create(size_t capacity)
     return region;
 }
 
-static int narena_region_find_space(NArenaRegion *region, size_t amount,
-                                    size_t *offset_out)
+static int narena_region_layout(NArenaRegion *region, size_t amount,
+                               size_t alignment, size_t *header_offset,
+                               size_t *payload_offset, size_t *end_offset)
 {
-    const size_t offset = narena_align_offset(region->offset);
-    if (offset == SIZE_MAX || offset > region->size ||
-        amount > region->size - offset)
+    uintptr_t base = (uintptr_t)region->data;
+    uintptr_t candidate;
+    size_t padding, remainder;
+    if (region->offset > UINTPTR_MAX - base ||
+        sizeof(NArenaAllocationHeader) > UINTPTR_MAX - base - region->offset)
         return 0;
-    *offset_out = offset;
-    return 1;
+    candidate = base + region->offset + sizeof(NArenaAllocationHeader);
+    remainder = (size_t)(candidate % alignment);
+    padding = remainder ? alignment - remainder : 0;
+    if (padding > UINTPTR_MAX - candidate)
+        return 0;
+    candidate += padding;
+    if (candidate < base || candidate - base > SIZE_MAX)
+        return 0;
+    *payload_offset = (size_t)(candidate - base);
+    *header_offset = *payload_offset - sizeof(NArenaAllocationHeader);
+    if (narena_size_add_overflow(*payload_offset, amount))
+        return 0;
+    *end_offset = *payload_offset + amount;
+    return *end_offset <= region->size;
 }
 
-void *narena_alloc(NArena *arena, size_t amount)
+static int narena_is_power_of_two(size_t value)
+{
+    return value != 0 && (value & (value - 1)) == 0;
+}
+
+void *narena_alloc_aligned(NArena *arena, size_t amount, size_t alignment)
 {
     NArenaRegion *region;
-    size_t total, offset = 0;
-    if (!arena || amount == 0 ||
+    size_t required, header_offset = 0, payload_offset = 0, end_offset = 0;
+    if (!arena || amount == 0 || !narena_is_power_of_two(alignment) ||
         narena_size_add_overflow(sizeof(NArenaAllocationHeader), amount))
         return NULL;
-    total = sizeof(NArenaAllocationHeader) + amount;
+    if (alignment < alignof(max_align_t))
+        alignment = alignof(max_align_t);
+    required = sizeof(NArenaAllocationHeader) + amount;
+    if (narena_size_add_overflow(required, alignment - 1))
+        return NULL;
     region = arena->current;
-    while (region && !narena_region_find_space(region, total, &offset))
+    while (region && !narena_region_layout(region, amount, alignment,
+                                           &header_offset, &payload_offset,
+                                           &end_offset))
         region = region->next;
     if (!region) {
-        size_t capacity = total > NARENA_DEFAULT_REGION_SIZE
-            ? total : NARENA_DEFAULT_REGION_SIZE;
+        size_t capacity = required > NARENA_DEFAULT_REGION_SIZE
+            ? required : NARENA_DEFAULT_REGION_SIZE;
+        if (capacity < sizeof(NArenaAllocationHeader) + amount + alignment - 1)
+            capacity = sizeof(NArenaAllocationHeader) + amount + alignment - 1;
         region = narena_region_create(capacity);
         if (!region)
             return NULL;
+        if (!narena_region_layout(region, amount, alignment, &header_offset,
+                                  &payload_offset, &end_offset)) {
+            free(region->data);
+            free(region);
+            return NULL;
+        }
         if (arena->tail)
             arena->tail->next = region;
         else
             arena->head = region;
         arena->tail = region;
-        offset = 0;
     }
     arena->current = region;
     {
         NArenaAllocationHeader *header =
-            (NArenaAllocationHeader *)(void *)(region->data + offset);
+            (NArenaAllocationHeader *)(void *)(region->data + header_offset);
         header->info.size = amount;
         header->info.magic = NARENA_ALLOCATION_MAGIC;
-        region->offset = offset + total;
-        return (void *)(header + 1);
+        region->offset = end_offset;
+        return (void *)(region->data + payload_offset);
     }
+}
+
+void *narena_alloc(NArena *arena, size_t amount)
+{
+    return narena_alloc_aligned(arena, amount, alignof(max_align_t));
 }
 
 void *narena_calloc(NArena *arena, size_t count, size_t amount)
@@ -170,6 +202,44 @@ void *narena_calloc(NArena *arena, size_t count, size_t amount)
     if (ptr)
         memset(ptr, 0, total);
     return ptr;
+}
+
+void *narena_memdup(NArena *arena, const void *src, size_t amount)
+{
+    void *copy;
+    if (!arena || !src || amount == 0)
+        return NULL;
+    copy = narena_alloc(arena, amount);
+    if (copy)
+        memcpy(copy, src, amount);
+    return copy;
+}
+
+/* Return storage consumption including allocation headers and padding. */
+size_t narena_bytes_used(const NArena *arena)
+{
+    size_t total = 0;
+    if (!arena)
+        return 0;
+    for (const NArenaRegion *region = arena->head; region; region = region->next) {
+        if (region->offset > SIZE_MAX - total)
+            return SIZE_MAX;
+        total += region->offset;
+    }
+    return total;
+}
+
+size_t narena_bytes_reserved(const NArena *arena)
+{
+    size_t total = 0;
+    if (!arena)
+        return 0;
+    for (const NArenaRegion *region = arena->head; region; region = region->next) {
+        if (region->size > SIZE_MAX - total)
+            return SIZE_MAX;
+        total += region->size;
+    }
+    return total;
 }
 
 void *narena_realloc(NArena *arena, void *ptr, size_t amount)
